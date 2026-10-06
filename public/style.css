@@ -228,6 +228,27 @@ tr.row-detail > td { background: #f7fbfc; border-bottom: 1px solid var(--line); 
 .pill-ok { color: var(--ok); border-color: #a9d8c4; background: var(--ok-soft); }
 .pill-bad { color: var(--accent); border-color: #f3b7b0; background: var(--accent-soft); }
 .pill-mute { color: var(--ink-soft); }
+.pill-warn { color: #a05a00; border-color: #ecd3a8; background: #fdf6e7; }
+
+/* 更正 */
+.threshold-editor { display: flex; align-items: center; gap: 8px; color: var(--ink-soft); font-size: 12px; }
+.threshold-editor input {
+  width: 76px; padding: 3px 6px;
+  border: 1px solid var(--line); border-radius: 4px;
+  font-size: 13px; color: var(--ink); background: #fff;
+}
+
+.alert-list { padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
+.alert-item {
+  padding: 7px 10px;
+  border: 1px solid #f3b7b0;
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.value-old { color: var(--ink-soft); text-decoration: line-through; }
 
 .cond-list { list-style: none; margin: 0; padding: 0; }
 .cond-list li { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; border-bottom: 1px dashed var(--line-soft); }

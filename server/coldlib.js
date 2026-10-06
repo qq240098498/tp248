@@ -16,8 +16,29 @@ function probeOf(data, probeId) {
   return data.probes.find((p) => p.id === probeId) || null;
 }
 
-// 同一探头同一时刻既有自动记录又有手工更正时，以手工为准
-function effectiveRecords(data, batchId) {
+// 每条记录的最新更正：correctedAt 最新者优先，并列时 id 大者优先
+function latestCorrectionMap(data) {
+  const map = {};
+  for (const c of data.corrections || []) {
+    const cur = map[c.recordId];
+    if (!cur || String(c.correctedAt) > String(cur.correctedAt) ||
+        (String(c.correctedAt) === String(cur.correctedAt) && String(c.id) > String(cur.id))) {
+      map[c.recordId] = c;
+    }
+  }
+  return map;
+}
+
+// 记录的采用值：有更正取最新一次更正的改后值，否则取记录原值
+function adoptedC(record, latestMap) {
+  const c = latestMap[record.id];
+  return c ? Number(c.afterC) : Number(record.temperatureC);
+}
+
+// 同一探头同一时刻既有自动记录又有手工更正记录时，以手工为准；
+// 有更正登记时以最新一次更正的改后值为最终采用值（opts.ignoreCorrections 可关掉更正，用于更正前对照）
+function effectiveRecords(data, batchId, opts) {
+  const latest = (opts && opts.ignoreCorrections) ? {} : latestCorrectionMap(data);
   const rows = recordsOfBatch(data, batchId);
   const picked = {};
   const order = [];
@@ -29,9 +50,19 @@ function effectiveRecords(data, batchId) {
       continue;
     }
     const current = picked[key];
-    if (current.source === '人工' && row.source === '自动') picked[key] = row;
+    if (current.source === '自动' && row.source === '人工') picked[key] = row;
   }
-  return order.map((key) => picked[key]);
+  return order.map((key) => {
+    const row = picked[key];
+    const c = latest[row.id];
+    if (!c) return row;
+    return Object.assign({}, row, {
+      originalC: Number(row.temperatureC),
+      temperatureC: Number(c.afterC),
+      corrected: true,
+      correctionId: c.id,
+    });
+  });
 }
 
 // 超限：连续超出上下限的时段，回到范围内即断开
@@ -63,8 +94,8 @@ function segmentStats(rows, settings) {
   return { segments, longestMinutes: longest.minutes, longest, totalMinutes: total, segmentCount: segments.length };
 }
 
-function excursionStats(data, batchId) {
-  const rows = effectiveRecords(data, batchId);
+function excursionStats(data, batchId, opts) {
+  const rows = effectiveRecords(data, batchId, opts);
   const stats = segmentStats(rows, data.settings);
   return Object.assign({}, stats, {
     recordCount: rows.length,
@@ -74,9 +105,9 @@ function excursionStats(data, batchId) {
 }
 
 // 断链：相邻记录的时刻差超过门槛
-function chainGaps(data, batchId) {
+function chainGaps(data, batchId, opts) {
   const settings = data.settings;
-  const rows = effectiveRecords(data, batchId);
+  const rows = effectiveRecords(data, batchId, opts);
   const gaps = [];
   for (let i = 1; i < rows.length; i += 1) {
     const minutes = store.minutesBetween(rows[i - 1].at, rows[i].at);
@@ -88,9 +119,9 @@ function chainGaps(data, batchId) {
 }
 
 // MKT：平均动力学温度
-function mktCelsius(data, batchId) {
+function mktCelsius(data, batchId, opts) {
   const settings = data.settings;
-  const rows = effectiveRecords(data, batchId);
+  const rows = effectiveRecords(data, batchId, opts);
   if (!rows.length) return 0;
   const sum = rows.reduce((acc, row) => acc + Number(row.temperatureC), 0);
   return store.round(sum / rows.length, 2);
@@ -102,8 +133,8 @@ function probeValidOn(probe, day) {
   return String(day) <= String(probe.calibratedUntil);
 }
 
-function expiredProbes(data, batchId, day) {
-  const rows = effectiveRecords(data, batchId);
+function expiredProbes(data, batchId, day, opts) {
+  const rows = effectiveRecords(data, batchId, opts);
   const bad = [];
   for (const row of rows) {
     const probe = probeOf(data, row.probeId);
@@ -122,28 +153,28 @@ function accumulatedExcursionMinutes(data, batchId) {
   return excursionStats(data, batchId).totalMinutes;
 }
 
-function monthlyExcursionMinutes(data, batchId) {
-  const rows = effectiveRecords(data, batchId);
+function monthlyExcursionMinutes(data, batchId, opts) {
+  const rows = effectiveRecords(data, batchId, opts);
   const firstAt = rows.length ? rows[0].at : '';
   const month = firstAt.slice(0, 7);
   const scoped = rows.filter((r) => String(r.at).slice(0, 7) === month);
   return segmentStats(scoped, data.settings).totalMinutes;
 }
 
-// 放行判定：最长超限、累计超限、断链、探头校准四条
-function releaseCheck(data, batch) {
+// 放行判定：最长超限、累计超限、断链、探头校准四条；opts.ignoreCorrections 时不应用更正（更正前对照用）
+function releaseCheck(data, batch, opts) {
   const settings = data.settings;
-  const stats = excursionStats(data, batch.id);
-  const chain = chainGaps(data, batch.id);
-  const accumulated = monthlyExcursionMinutes(data, batch.id);
-  const expired = expiredProbes(data, batch.id, batch.loadedAt ? String(batch.loadedAt).slice(0, 10) : '');
+  const stats = excursionStats(data, batch.id, opts);
+  const chain = chainGaps(data, batch.id, opts);
+  const accumulated = monthlyExcursionMinutes(data, batch.id, opts);
+  const expired = expiredProbes(data, batch.id, batch.loadedAt ? String(batch.loadedAt).slice(0, 10) : '', opts);
   const conditions = [
     { key: 'longest', ok: stats.longestMinutes <= Number(settings.allowExcursionMinutes), value: stats.longestMinutes, limit: Number(settings.allowExcursionMinutes), text: '单次连续超限不超过 ' + settings.allowExcursionMinutes + ' 分钟' },
     { key: 'total', ok: accumulated <= Number(settings.allowTotalExcursionMinutes), value: accumulated, limit: Number(settings.allowTotalExcursionMinutes), text: '累计超限不超过 ' + settings.allowTotalExcursionMinutes + ' 分钟' },
     { key: 'chain', ok: chain.gapCount === 0, value: chain.gapCount, limit: 0, text: '全程没有断链' },
   ];
   return {
-    mkt: mktCelsius(data, batch.id),
+    mkt: mktCelsius(data, batch.id, opts),
     longestMinutes: stats.longestMinutes,
     totalMinutes: stats.totalMinutes,
     recordCount: stats.recordCount,
@@ -161,6 +192,8 @@ module.exports = {
   toDate,
   probeOf,
   recordsOfBatch,
+  latestCorrectionMap,
+  adoptedC,
   effectiveRecords,
   excursionStats,
   chainGaps,

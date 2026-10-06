@@ -20,16 +20,20 @@ const state = {
   batchesView: [],
   recordsView: [],
   releasesView: [],
+  correctionsView: [],
+  correctionSummary: null,
   roomDetail: {},
   batchDetail: {},
   batchOut: {},
   batchDetailError: {},
   expandedRooms: new Set(),
   expandedBatches: new Set(),
+  expandedRepeated: new Set(),
   filters: {
     rooms: { status: '', type: '', keyword: '', probeStatus: '', probeCal: 'all' },
     batches: { status: '', roomId: '', product: '', noRecord: false },
     records: { batchId: '', probeId: '', source: '', from: '', to: '' },
+    corrections: { batchId: '', probeId: '' },
     releases: { decision: '' }
   }
 };
@@ -183,6 +187,7 @@ async function loadView(view) {
     else if (view === 'rooms') await loadRoomsView();
     else if (view === 'batches') await loadBatchesView();
     else if (view === 'records') await loadRecordsView();
+    else if (view === 'corrections') await loadCorrectionsView();
     else if (view === 'releases') await loadReleasesView();
   } catch (err) { showError(err); }
 }
@@ -211,9 +216,11 @@ function renderOverview() {
     { title: '批次', value: s.batchCount, sub: statusSummaryText(sc), go: { view: 'batches' } },
     { title: '在办批次', value: s.openBatchCount, sub: '在库与待放行', go: { view: 'batches' } },
     { title: '温度记录', value: s.recordCount, sub: '人工 ' + s.manualRecordCount, go: { view: 'records' } },
+    { title: '更正登记', value: s.correctionCount, sub: '高占比探头 ' + num(s.highRatioProbeCount) + ' 个', go: { view: 'corrections' } },
     { title: '放行 / 拒收', value: s.releasedCount + ' / ' + s.rejectedCount, sub: '台账 ' + s.releaseCount + ' 条', go: { view: 'releases' } },
     { title: '满足放行条件', value: s.readyToRelease, sub: '被挡下 ' + s.blockedCount, go: { view: 'batches' } },
     { title: '没有温度记录', value: s.noRecordBatches, sub: '个批次', go: { view: 'batches', noRecord: true } },
+    { title: '更正登记', value: s.correctionCount, sub: '高占比探头 ' + num(s.highRatioProbeCount) + ' 个', go: { view: 'corrections' } },
     { title: 'MKT', value: s.maxMkt, sub: '平均 ' + s.averageMkt, go: { view: 'batches' } }
   ];
   $('overviewCards').innerHTML = cards.map(function (c) {
@@ -400,11 +407,15 @@ function batchDetailRow(b) {
 
   const records = (d.records || []).map(function (r) {
     const oor = out[r.id];
-    return '<tr><td>' + esc(r.at) + '</td><td>' + esc(r.probeCode) + '</td><td class="num">' + num(r.temperatureC) + '</td>' +
+    const corrected = num(r.correctionCount) > 0;
+    return '<tr><td>' + esc(r.at) + '</td><td>' + esc(r.probeCode) + '</td>' +
+      '<td class="num">' + num(r.effectiveC != null ? r.effectiveC : r.temperatureC) + '</td>' +
+      '<td class="num">' + (corrected ? '<span class="value-old">' + esc(r.temperatureC) + '</span>' : '—') + '</td>' +
       '<td>' + esc(r.source) + '</td>' +
       '<td>' + (oor ? pill('超限', 'pill-bad') : pill('正常', 'pill-mute')) + '</td>' +
-      '<td>' + (r.probeExpired ? pill('已过期', 'pill-bad') : pill('有效', 'pill-mute')) + '</td></tr>';
-  }).join('') || '<tr><td colspan="6" class="empty">没有温度记录</td></tr>';
+      '<td>' + (r.probeExpired ? pill('已过期', 'pill-bad') : pill('有效', 'pill-mute')) + '</td>' +
+      '<td>' + (corrected ? pill(num(r.correctionCount) + ' 次', 'pill-warn') : '—') + '</td></tr>';
+  }).join('') || '<tr><td colspan="8" class="empty">没有温度记录</td></tr>';
 
   let segmentsHtml;
   if (d.segmentsUnavailable) {
@@ -441,6 +452,31 @@ function batchDetailRow(b) {
       '<td class="num">' + num(r.mkt) + '</td><td>' + esc(r.basis) + '</td></tr>';
   }).join('') || '<tr><td colspan="5" class="empty">没有放行记录</td></tr>';
 
+  const corrections = d.corrections || [];
+  let correctionBlock = '';
+  if (corrections.length) {
+    const corrRows = corrections.map(function (c) {
+      return '<tr><td>' + esc(c.at) + '</td><td>' + esc(c.probeCode) + '</td>' +
+        '<td class="num">' + num(c.beforeC) + ' → ' + num(c.afterC) + '</td>' +
+        '<td>' + esc(c.corrector) + '</td><td>' + esc(c.correctedAt) + '</td><td>' + esc(c.basis) + '</td></tr>';
+    }).join('');
+    const current = {
+      longestMinutes: check.longestMinutes,
+      totalMinutes: check.totalMinutes,
+      chainGapCount: check.chain ? check.chain.gapCount : 0,
+      mkt: check.mkt,
+      pass: check.pass
+    };
+    correctionBlock = '<div class="detail-block"><h4>更正记录（' + corrections.length + '）</h4>' +
+      '<table class="mini-table"><thead><tr><th>记录时刻</th><th>探头</th><th class="num">改前 → 改后(℃)</th><th>更正人</th><th>更正时刻</th><th>依据</th></tr></thead><tbody>' +
+      corrRows + '</tbody></table>' +
+      (d.checkBeforeCorrections
+        ? '<h4>更正前后判定对照</h4>' + impactTableHtml(d.checkBeforeCorrections, current) +
+          '<div class="detail-note">「更正前」是全部更正都不参与时的判定，「更正后」是当前判定。</div>'
+        : '') +
+      '</div>';
+  }
+
   const decisionBtns = '<div class="detail-actions">' +
     '<button type="button" class="btn btn-primary" data-action="batch-release" data-id="' + esc(b.id) + '">放行</button>' +
     '<button type="button" class="btn" data-action="batch-reject" data-id="' + esc(b.id) + '">拒收</button>' +
@@ -450,7 +486,7 @@ function batchDetailRow(b) {
   return '<tr class="row-detail"><td colspan="13">' +
     '<div class="detail-grid">' +
     '<div class="detail-block"><h4>温度记录（' + (d.records || []).length + '）</h4>' +
-    '<table class="mini-table"><thead><tr><th>时刻</th><th>探头</th><th class="num">温度(℃)</th><th>来源</th><th>是否超限</th><th>探头是否过期</th></tr></thead><tbody>' + records + '</tbody></table></div>' +
+    '<table class="mini-table"><thead><tr><th>时刻</th><th>探头</th><th class="num">采用值(℃)</th><th class="num">原始值(℃)</th><th>来源</th><th>是否超限</th><th>探头是否过期</th><th>更正</th></tr></thead><tbody>' + records + '</tbody></table></div>' +
     '<div class="detail-block"><h4>超限段（' + (d.segments || []).length + '）</h4>' + segmentsHtml +
     '<h4>断链缺口（' + (d.chainGaps || []).length + '）</h4>' +
     '<table class="mini-table"><thead><tr><th>起</th><th>止</th><th class="num">实际(分)</th><th class="num">计入(分)</th></tr></thead><tbody>' + gaps + '</tbody></table></div>' +
@@ -460,6 +496,7 @@ function batchDetailRow(b) {
     '<div class="detail-block"><h4>放行记录（' + (d.releases || []).length + '）</h4>' +
     '<table class="mini-table"><thead><tr><th>决定</th><th>时刻</th><th>经办人</th><th class="num">MKT</th><th>依据</th></tr></thead><tbody>' + releases + '</tbody></table>' +
     decisionBtns + '</div>' +
+    correctionBlock +
     '</div></td></tr>';
 }
 
@@ -530,19 +567,26 @@ async function loadRecordsView() {
     : ('共 ' + rows.length + ' 条，已显示前 ' + Math.min(RECORD_PAGE, rows.length) + ' 条');
   const tbody = $('recordRows');
   if (!shown.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty">没有符合条件的温度记录</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" class="empty">没有符合条件的温度记录</td></tr>';
     return;
   }
   tbody.innerHTML = shown.map(function (r) {
+    const corrected = num(r.correctionCount) > 0;
     return '<tr class="row-main" data-rowkind="record" data-id="' + esc(r.id) + '">' +
       '<td>' + esc(r.batchCode) + '</td>' +
       '<td>' + esc(r.probeCode) + '</td>' +
       '<td>' + esc(r.at) + '</td>' +
-      '<td class="num">' + num(r.temperatureC) + '</td>' +
+      '<td class="num">' + num(r.effectiveC != null ? r.effectiveC : r.temperatureC) + '</td>' +
+      '<td class="num">' + (corrected ? '<span class="value-old">' + esc(r.temperatureC) + '</span>' : '—') + '</td>' +
       '<td>' + esc(r.source) + '</td>' +
       '<td>' + esc(r.operator) + '</td>' +
       '<td>' + (r.outOfRange ? pill('超限', 'pill-bad') : pill('正常', 'pill-mute')) + '</td>' +
-      '<td class="cell-actions"><button type="button" class="btn btn-sm btn-danger" data-action="record-del" data-id="' + esc(r.id) + '">删除</button></td>' +
+      '<td>' + (corrected
+        ? '<button type="button" class="btn btn-sm" data-action="record-history" data-id="' + esc(r.id) + '">' + num(r.correctionCount) + ' 次</button>'
+        : '—') + '</td>' +
+      '<td class="cell-actions">' +
+      '<button type="button" class="btn btn-sm" data-action="record-correct" data-id="' + esc(r.id) + '">更正</button>' +
+      '<button type="button" class="btn btn-sm btn-danger" data-action="record-del" data-id="' + esc(r.id) + '">删除</button></td>' +
       '</tr>';
   }).join('');
 }
@@ -550,6 +594,208 @@ async function loadRecordsView() {
 function toApiTime(v) {
   if (!v) return '';
   return String(v).replace('T', ' ') + ':00';
+}
+
+/* ---------- 更正 ---------- */
+
+async function loadCorrectionsView() {
+  const f = state.filters.corrections;
+  const params = new URLSearchParams();
+  if (f.batchId) params.set('batchId', f.batchId);
+  if (f.probeId) params.set('probeId', f.probeId);
+  const results = await Promise.all([
+    api('GET', '/api/corrections/summary'),
+    api('GET', '/api/corrections' + (params.toString() ? '?' + params.toString() : ''))
+  ]);
+  state.correctionSummary = results[0];
+  state.correctionsView = results[1];
+  renderCorrections();
+}
+
+function renderCorrections() {
+  const s = state.correctionSummary;
+  if (!s) return;
+  $('corrThresholdInput').value = s.thresholdPct;
+
+  const alerts = s.highRatioProbes || [];
+  $('corrAlertList').innerHTML = alerts.length
+    ? alerts.map(function (p) {
+      return '<div class="alert-item">' + pill('提醒', 'pill-bad') + ' 探头 <b>' + esc(p.probeCode) + '</b>（' + esc(p.roomCode) + '）更正占比 ' +
+        '<b>' + num(p.ratioPct) + '%</b>，达到阈值 ' + num(s.thresholdPct) + '%：更正 ' + num(p.correctionCount) + ' 条 / 记录 ' + num(p.recordCount) + ' 条，请核查探头与更正依据。</div>';
+    }).join('')
+    : '<div class="detail-note">没有更正占比达到阈值（' + num(s.thresholdPct) + '%）的探头。</div>';
+
+  const probeRows = (s.byProbe || []).map(function (p) {
+    return '<tr class="' + (p.overThreshold ? 'row-danger' : '') + '">' +
+      '<td>' + esc(p.probeCode) + '</td><td>' + esc(p.roomCode) + '</td>' +
+      '<td class="num">' + num(p.recordCount) + '</td>' +
+      '<td class="num">' + num(p.correctionCount) + '</td>' +
+      '<td class="num">' + num(p.ratioPct) + '</td>' +
+      '<td>' + (p.overThreshold ? pill('超阈值', 'pill-bad') : pill('正常', 'pill-mute')) + '</td></tr>';
+  }).join('');
+  $('corrProbeRows').innerHTML = probeRows || '<tr><td colspan="6" class="empty">没有探头记录</td></tr>';
+
+  const batchRows = (s.byBatch || []).map(function (b) {
+    return '<tr class="' + (b.overThreshold ? 'row-danger' : '') + '">' +
+      '<td>' + esc(b.batchCode) + '</td><td>' + esc(b.product) + '</td>' +
+      '<td class="num">' + num(b.recordCount) + '</td>' +
+      '<td class="num">' + num(b.correctionCount) + '</td>' +
+      '<td class="num">' + num(b.ratioPct) + '</td></tr>';
+  }).join('');
+  $('corrBatchRows').innerHTML = batchRows || '<tr><td colspan="5" class="empty">没有批次记录</td></tr>';
+
+  const repeated = s.repeated || [];
+  if (!repeated.length) {
+    $('corrRepeatedRows').innerHTML = '<tr><td colspan="6" class="empty">没有被反复更正的时刻</td></tr>';
+  } else {
+    $('corrRepeatedRows').innerHTML = repeated.map(function (g) {
+      const main = '<tr class="row-main" data-rowkind="repeated" data-id="' + esc(g.recordId) + '">' +
+        '<td>' + esc(g.batchCode) + '</td><td>' + esc(g.probeCode) + '</td><td>' + esc(g.at) + '</td>' +
+        '<td class="num">' + num(g.count) + '</td>' +
+        '<td class="num">' + (g.originalC == null ? '—' : num(g.originalC)) + '</td>' +
+        '<td class="num">' + (g.adoptedC == null ? '—' : num(g.adoptedC)) + '</td></tr>';
+      if (!state.expandedRepeated.has(g.recordId)) return main;
+      const chain = g.history.map(function (h, i) {
+        return '<tr><td class="num">' + (i + 1) + '</td>' +
+          '<td class="num">' + num(h.beforeC) + ' → ' + num(h.afterC) + '</td>' +
+          '<td>' + esc(h.corrector) + '</td><td>' + esc(h.correctedAt) + '</td><td>' + esc(h.basis) + '</td></tr>';
+      }).join('');
+      return main + '<tr class="row-detail"><td colspan="6"><div class="detail-block">' +
+        '<h4>该时刻的更正历史（' + g.count + ' 次，按更正时刻排列）</h4>' +
+        '<table class="mini-table"><thead><tr><th class="num">#</th><th class="num">改前 → 改后(℃)</th><th>更正人</th><th>更正时刻</th><th>依据</th></tr></thead><tbody>' +
+        chain + '</tbody></table></div></td></tr>';
+    }).join('');
+  }
+
+  const rows = state.correctionsView || [];
+  $('correctionsNote').textContent = '共 ' + rows.length + ' 条更正；原始值是自动采集的最初读数，当前采用是判定实际使用的值';
+  if (!rows.length) {
+    $('corrRows').innerHTML = '<tr><td colspan="11" class="empty">没有符合条件的更正记录</td></tr>';
+    return;
+  }
+  $('corrRows').innerHTML = rows.map(function (c) {
+    return '<tr>' +
+      '<td>' + esc(c.batchCode) + '</td>' +
+      '<td>' + esc(c.probeCode) + '</td>' +
+      '<td>' + esc(c.at) + '</td>' +
+      '<td class="num">' + (c.originalC == null ? '—' : num(c.originalC)) + (c.recordDeleted ? ' <span class="pill">原记录已删</span>' : '') + '</td>' +
+      '<td class="num">' + num(c.beforeC) + '</td>' +
+      '<td class="num">' + num(c.afterC) + '</td>' +
+      '<td class="num">' + (c.adoptedC == null ? '—' : num(c.adoptedC)) + '</td>' +
+      '<td>' + esc(c.corrector) + '</td>' +
+      '<td>' + esc(c.correctedAt) + '</td>' +
+      '<td>' + esc(c.basis) + '</td>' +
+      '<td class="cell-actions"><button type="button" class="btn btn-sm" data-action="record-history" data-id="' + esc(c.recordId) + '">历史</button></td>' +
+      '</tr>';
+  }).join('');
+}
+
+/* 判定对照表：更正前 vs 更正后 */
+function impactTableHtml(before, after) {
+  const rows = [
+    ['最长超限（分）', before.longestMinutes, after.longestMinutes],
+    ['累计超限（分）', before.totalMinutes, after.totalMinutes],
+    ['断链数', before.chainGapCount, after.chainGapCount],
+    ['MKT（℃）', before.mkt, after.mkt],
+    ['是否满足放行条件', before.pass ? '满足' : '不满足', after.pass ? '满足' : '不满足']
+  ];
+  return '<table class="mini-table"><thead><tr><th>指标</th><th class="num">更正前</th><th class="num">更正后</th></tr></thead><tbody>' +
+    rows.map(function (r) {
+      const changed = String(r[1]) !== String(r[2]);
+      return '<tr' + (changed ? ' class="row-danger"' : '') + '><td>' + esc(r[0]) + '</td>' +
+        '<td class="num">' + esc(r[1]) + '</td><td class="num">' + esc(r[2]) + '</td></tr>';
+    }).join('') + '</tbody></table>';
+}
+
+/* 登记更正弹层：knownRecord 是从记录行点「更正」时带进来的记录 */
+function openCorrectionForm(knownRecord) {
+  const fixed = !!knownRecord;
+  const body =
+    (fixed
+      ? '<div class="field"><label>记录</label><input type="text" value="' +
+        esc(knownRecord.batchCode + ' / ' + knownRecord.probeCode + ' / ' + knownRecord.at) + '" disabled></div>' +
+        '<div class="field"><label>当前采用值（℃）</label><input type="text" value="' +
+        esc(knownRecord.effectiveC != null ? knownRecord.effectiveC : knownRecord.temperatureC) +
+        '（原始 ' + esc(knownRecord.temperatureC) + '，已更正 ' + num(knownRecord.correctionCount) + ' 次）" disabled></div>'
+      : '<div class="field"><label>批次</label><select data-field="batchId" id="corrBatchSel">' + batchOptions('') + '</select></div>' +
+        '<div class="field"><label>探头</label><select data-field="probeId" id="corrProbeSel">' + probeOptions('') + '</select></div>' +
+        '<div class="field"><label>要更正的记录</label><select data-field="recordId" id="corrRecordSel"><option value="">先选批次与探头</option></select>' +
+        '<div class="field-hint" id="corrRecordHint"></div></div>') +
+    '<div class="field"><label>更正后温度（℃）</label><input type="number" step="0.1" data-field="afterC" value=""></div>' +
+    '<div class="field"><label>更正人</label><input type="text" data-field="corrector" value=""></div>' +
+    '<div class="field"><label>依据</label><input type="text" data-field="basis" value="" placeholder="复核单号、现场复测情况等"></div>' +
+    '<div class="field"><label>备注</label><textarea data-field="remark"></textarea></div>' +
+    '<div class="field-hint">原记录不会被改动：更正单独登记，判定自动改用更正后的值。</div>';
+
+  openModal('登记更正', body, '登记', async function () {
+    const v = formValues();
+    const recordId = fixed ? knownRecord.id : v.recordId;
+    try {
+      const out = await api('POST', '/api/corrections', {
+        recordId: recordId,
+        afterC: v.afterC === '' ? '' : Number(v.afterC),
+        corrector: v.corrector,
+        basis: v.basis,
+        remark: v.remark
+      });
+      await refreshAfterMutation();
+      const c = out.correction || {};
+      const impact = out.impact;
+      const doneBody =
+        '<div class="field-hint">已登记 ' + esc(c.id || '') + '：' + esc(c.batchCode || '') + ' / ' + esc(c.probeCode || '') +
+        ' / ' + esc(c.at || '') + '，' + esc(c.beforeC) + '℃ → ' + esc(c.afterC) + '℃（更正人 ' + esc(c.corrector || '') + '）。</div>' +
+        (impact
+          ? '<h4 style="margin:10px 0 6px">受影响批次 ' + esc(impact.batchCode) + ' 的判定对照</h4>' + impactTableHtml(impact.before, impact.after)
+          : '');
+      openModal('更正已登记', doneBody, '关闭', function () { closeModal(); });
+    } catch (err) { showError(err); }
+  });
+
+  if (!fixed) {
+    const recordSel = $('corrRecordSel');
+    const hint = $('corrRecordHint');
+    const reloadRecords = async function () {
+      const batchId = $('corrBatchSel').value;
+      const probeId = $('corrProbeSel').value;
+      recordSel.innerHTML = '<option value="">请选择记录</option>';
+      hint.textContent = '';
+      if (!batchId || !probeId) return;
+      try {
+        const rows = await api('GET', '/api/records?batchId=' + encodeURIComponent(batchId) + '&probeId=' + encodeURIComponent(probeId));
+        const sorted = rows.slice().sort(function (a, b) { return a.at < b.at ? -1 : 1; });
+        recordSel.innerHTML = '<option value="">请选择记录</option>' + sorted.map(function (r) {
+          return '<option value="' + esc(r.id) + '">' + esc(r.at + ' ｜ 采用 ' + r.effectiveC + '℃ ｜ 原始 ' + r.temperatureC + '℃ ｜ ' + r.source + (num(r.correctionCount) ? ' ｜ 已更正 ' + r.correctionCount + ' 次' : '')) + '</option>';
+        }).join('');
+        hint.textContent = rows.length ? ('该组合共 ' + rows.length + ' 条记录') : '这个批次与探头下没有记录';
+      } catch (err) { showError(err); }
+    };
+    $('corrBatchSel').addEventListener('change', reloadRecords);
+    $('corrProbeSel').addEventListener('change', reloadRecords);
+  }
+}
+
+/* 同一时刻的更正历史弹层：按更正时刻排出每一次，含改了又改回去 */
+async function openCorrectionHistory(recordId) {
+  try {
+    const rows = await api('GET', '/api/corrections?recordId=' + encodeURIComponent(recordId));
+    let body;
+    if (!rows.length) {
+      body = '<div class="detail-note">这条记录没有更正。</div>';
+    } else {
+      const first = rows[0];
+      const chain = rows.map(function (h, i) {
+        return '<tr><td class="num">' + (i + 1) + '</td>' +
+          '<td class="num">' + num(h.beforeC) + ' → ' + num(h.afterC) + '</td>' +
+          '<td>' + esc(h.corrector) + '</td><td>' + esc(h.correctedAt) + '</td><td>' + esc(h.basis) + '</td></tr>';
+      }).join('');
+      body = '<div class="field-hint">' + esc(first.batchCode) + ' / ' + esc(first.probeCode) + ' / ' + esc(first.at) +
+        ' ｜ 原始值 ' + (first.originalC == null ? '—' : esc(first.originalC)) + '℃ ｜ 当前采用 ' +
+        (first.adoptedC == null ? '—' : esc(first.adoptedC)) + '℃ ｜ 共 ' + rows.length + ' 次更正</div>' +
+        '<table class="mini-table"><thead><tr><th class="num">#</th><th class="num">改前 → 改后(℃)</th><th>更正人</th><th>更正时刻</th><th>依据</th></tr></thead><tbody>' +
+        chain + '</tbody></table>';
+    }
+    openModal('更正历史', body, '关闭', function () { closeModal(); });
+  } catch (err) { showError(err); }
 }
 
 /* ---------- 放行台账 ---------- */
@@ -636,6 +882,14 @@ function renderFilters() {
       '<div class="filter-field"><label>起</label><input type="datetime-local" data-filter="from" value="' + esc(f.from) + '"></div>' +
       '<div class="filter-field"><label>止</label><input type="datetime-local" data-filter="to" value="' + esc(f.to) + '"></div>' +
       '<div class="filter-hint">不选批次时只渲染前 ' + RECORD_PAGE + ' 条；选定批次后显示该批次全部记录。</div>';
+  } else if (v === 'corrections') {
+    const f = state.filters.corrections;
+    const batchSel = [{ value: '', label: '全部' }].concat(state.batches.map(function (b) { return { value: b.id, label: b.code }; }));
+    const probeSel = [{ value: '', label: '全部' }].concat(state.probes.map(function (p) { return { value: p.id, label: p.code }; }));
+    html = '<h3>更正筛选</h3>' +
+      '<div class="filter-field"><label>批次</label>' + selectHtml('batchId', batchSel, f.batchId) + '</div>' +
+      '<div class="filter-field"><label>探头</label>' + selectHtml('probeId', probeSel, f.probeId) + '</div>' +
+      '<div class="filter-hint">筛选作用于更正台账；汇总与提醒始终按全部更正计算。提醒阈值在右上方面板里改。</div>';
   } else if (v === 'releases') {
     const f = state.filters.releases;
     html = '<h3>台账筛选</h3>' +
@@ -666,7 +920,8 @@ function openSettings() {
     '<div class="field"><label>单次允许超限（分钟）</label><input type="number" step="1" data-field="allowExcursionMinutes" value="' + esc(s.allowExcursionMinutes) + '"></div>' +
     '<div class="field"><label>累计允许超限（分钟）</label><input type="number" step="1" data-field="allowTotalExcursionMinutes" value="' + esc(s.allowTotalExcursionMinutes) + '"></div>' +
     '<div class="field"><label>断链门槛（分钟）</label><input type="number" step="1" data-field="chainGapMinutes" value="' + esc(s.chainGapMinutes) + '"></div>' +
-    '<div class="field"><label>记录间隔（分钟）</label><input type="number" step="1" data-field="recordIntervalMinutes" value="' + esc(s.recordIntervalMinutes) + '"></div>';
+    '<div class="field"><label>记录间隔（分钟）</label><input type="number" step="1" data-field="recordIntervalMinutes" value="' + esc(s.recordIntervalMinutes) + '"></div>' +
+    '<div class="field"><label>更正占比提醒阈值（%）</label><input type="number" step="0.1" min="0" data-field="correctionAlertRatioPct" value="' + esc(s.correctionAlertRatioPct) + '"></div>';
   openModal('设置', body, '保存', async function () {
     const v = formValues();
     const payload = {
@@ -675,7 +930,8 @@ function openSettings() {
       allowExcursionMinutes: Number(v.allowExcursionMinutes),
       allowTotalExcursionMinutes: Number(v.allowTotalExcursionMinutes),
       chainGapMinutes: Number(v.chainGapMinutes),
-      recordIntervalMinutes: Number(v.recordIntervalMinutes)
+      recordIntervalMinutes: Number(v.recordIntervalMinutes),
+      correctionAlertRatioPct: Number(v.correctionAlertRatioPct)
     };
     try {
       state.settings = await api('PATCH', '/api/settings', payload);
@@ -889,6 +1145,20 @@ async function handleAction(action, el) {
       return;
     }
     if (action === 'record-add') { openRecordForm(); return; }
+    if (action === 'record-correct') {
+      const rec = (state.recordsView || []).find(function (r) { return r.id === el.dataset.id; });
+      if (rec) openCorrectionForm(rec);
+      return;
+    }
+    if (action === 'record-history') { await openCorrectionHistory(el.dataset.id); return; }
+    if (action === 'correction-add') { openCorrectionForm(null); return; }
+    if (action === 'corr-threshold-save') {
+      const pct = Number($('corrThresholdInput').value);
+      if (!Number.isFinite(pct) || pct < 0) { showError({ message: '阈值要是不小于 0 的数字' }); return; }
+      state.settings = await api('PATCH', '/api/settings', { correctionAlertRatioPct: pct });
+      await loadCorrectionsView();
+      return;
+    }
     if (action === 'record-del') {
       const id = el.dataset.id;
       armDelete(el, async function () {
@@ -912,6 +1182,12 @@ async function toggleExpand(kind, id) {
     if (kind === 'batch') {
       if (state.expandedBatches.has(id)) { state.expandedBatches.delete(id); renderBatchRows(); }
       else await expandBatch(id);
+      return;
+    }
+    if (kind === 'repeated') {
+      if (state.expandedRepeated.has(id)) state.expandedRepeated.delete(id);
+      else state.expandedRepeated.add(id);
+      renderCorrections();
     }
   } catch (err) { showError(err); }
 }

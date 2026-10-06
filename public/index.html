@@ -25,6 +25,7 @@
     <button type="button" class="tab" data-view="rooms">冷库与探头</button>
     <button type="button" class="tab" data-view="batches">批次</button>
     <button type="button" class="tab" data-view="records">温度记录</button>
+    <button type="button" class="tab" data-view="corrections">更正</button>
     <button type="button" class="tab" data-view="releases">放行台账</button>
   </nav>
 
@@ -124,11 +125,99 @@
             <table class="data-table">
               <thead>
                 <tr>
-                  <th>批次</th><th>探头</th><th>时刻</th><th class="num">温度(℃)</th><th>来源</th>
-                  <th>登记人</th><th>是否超限</th><th>操作</th>
+                  <th>批次</th><th>探头</th><th>时刻</th><th class="num">采用值(℃)</th><th class="num">原始值(℃)</th><th>来源</th>
+                  <th>登记人</th><th>是否超限</th><th>更正</th><th>操作</th>
                 </tr>
               </thead>
               <tbody id="recordRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="view" data-view="corrections" id="view-corrections">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>高占比探头提醒</h2>
+            <div class="threshold-editor">
+              <label for="corrThresholdInput">提醒阈值（更正占比 %）</label>
+              <input type="number" id="corrThresholdInput" step="0.1" min="0">
+              <button type="button" class="btn btn-sm" data-action="corr-threshold-save">保存阈值</button>
+            </div>
+          </div>
+          <div class="alert-list" id="corrAlertList"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>按探头汇总</h2>
+            <span class="panel-hint">占比 = 更正条数 ÷ 该探头记录条数，按占比从高到低排</span>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>探头</th><th>所属冷库</th><th class="num">记录条数</th>
+                  <th class="num">更正条数</th><th class="num">更正占比(%)</th><th>是否超阈值</th>
+                </tr>
+              </thead>
+              <tbody id="corrProbeRows"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>按批次汇总</h2>
+            <span class="panel-hint">占比 = 更正条数 ÷ 该批次记录条数</span>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>批次</th><th>品名</th><th class="num">记录条数</th>
+                  <th class="num">更正条数</th><th class="num">更正占比(%)</th>
+                </tr>
+              </thead>
+              <tbody id="corrBatchRows"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>反复更正的时刻</h2>
+            <span class="panel-hint">同一时刻被更正 2 次及以上，点一行展开完整历史（含改了又改回去）</span>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>批次</th><th>探头</th><th>记录时刻</th><th class="num">更正次数</th>
+                  <th class="num">原始值(℃)</th><th class="num">当前采用值(℃)</th>
+                </tr>
+              </thead>
+              <tbody id="corrRepeatedRows"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>更正台账</h2>
+            <button type="button" class="btn btn-primary" data-action="correction-add">登记更正</button>
+          </div>
+          <div class="records-note" id="correctionsNote"></div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>批次</th><th>探头</th><th>记录时刻</th><th class="num">原始值(℃)</th>
+                  <th class="num">改前(℃)</th><th class="num">改后(℃)</th><th class="num">当前采用(℃)</th>
+                  <th>更正人</th><th>更正时刻</th><th>依据</th><th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="corrRows"></tbody>
             </table>
           </div>
         </div>

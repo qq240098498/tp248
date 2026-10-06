@@ -35,6 +35,7 @@ function overview(data) {
   const noRecordBatches = data.batches.filter((b) => !data.records.some((r) => r.batchId === b.id)).length;
   const expiredProbes = data.probes.filter((p) => !coldlib.probeValidOn(p, store.nowText().slice(0, 10))).length;
   const mktValues = decorated.map((d) => d.check.mkt).filter((v) => v > 0);
+  const corr = res.correctionSummary(data);
   return {
     today: store.nowText().slice(0, 10),
     roomCount: data.rooms.length,
@@ -53,6 +54,11 @@ function overview(data) {
     readyToRelease,
     blockedCount,
     noRecordBatches,
+    correctionCount: corr.totalCorrections,
+    correctedRecordCount: corr.correctedRecordCount,
+    highRatioProbeCount: corr.highRatioProbes.length,
+    repeatedCorrectionCount: corr.repeatedCount,
+    correctionAlertRatioPct: corr.thresholdPct,
     maxMkt: mktValues.length ? store.round(Math.max.apply(null, mktValues)) : 0,
     averageMkt: mktValues.length ? store.round(mktValues.reduce((a, b) => a + b, 0) / mktValues.length) : 0,
     settings: {
@@ -112,6 +118,10 @@ router.post('/records', withData((data, req) => ({ __save: true, __body: res.cre
 router.delete('/records/:id', withData((data, req) => ({ __save: true, __body: res.removeRecord(data, req.params.id) })));
 
 router.get('/releases', withData((data, req) => res.listReleases(data, req.query)));
+
+router.get('/corrections', withData((data, req) => res.listCorrections(data, req.query)));
+router.get('/corrections/summary', withData((data) => res.correctionSummary(data)));
+router.post('/corrections', withData((data, req) => ({ __save: true, __body: res.createCorrection(data, req.body || {}) })));
 
 router.use((req, r, next) => next(new AppError(404, 'NOT_FOUND', '这个地址没有对应功能：' + req.method + ' ' + req.originalUrl)));
 
