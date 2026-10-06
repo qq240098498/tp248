@@ -320,3 +320,56 @@ tr.row-detail > td { background: #f7fbfc; border-bottom: 1px solid var(--line); 
   .layout { flex-direction: column; }
   .filters { width: 100%; flex: 1 1 auto; position: static; }
 }
+
+/* 更正台账 */
+.threshold-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  background: #fbfdfe;
+  border-bottom: 1px solid var(--line-soft);
+}
+.threshold-bar label { color: var(--ink-soft); }
+.threshold-input { width: 72px; padding: 4px 7px; border: 1px solid var(--line); border-radius: 4px; font-size: 13px; }
+.warn-box { padding: 10px 12px; }
+.warn-head { color: var(--accent); font-weight: 700; margin-bottom: 6px; }
+.warn-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.warn-chip {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 14px;
+  background: var(--accent-soft);
+  border: 1px solid #f3b7b0;
+  color: var(--accent);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.warn-empty { color: var(--ink-soft); font-size: 12px; }
+.val-bad { color: var(--accent); }
+.val-ok { color: var(--ok); }
+.val-corr { color: #b3541e; }
+.val-mute { color: var(--ink-soft); }
+.pill-warn { color: #b3541e; border-color: #ecc8a0; background: #fdf3e7; }
+.cell-sub { font-size: 11px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.row-restored td { background: #fdf3e7; }
+.row-migrated td { background: #fbf7ef; }
+.repeated-detail { padding: 8px 12px 10px; background: #fbfdfe; border-bottom: 1px solid var(--line-soft); }
+.repeated-detail h4 { margin: 4px 0 6px; font-size: 13px; color: var(--primary-dark); }
+.detail-block-wide { flex-basis: 100%; min-width: 0; }
+.corr-target {
+  background: var(--primary-soft);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.compare-head { font-weight: 700; color: var(--primary-dark); margin-bottom: 8px; }
+.compare-block { margin-bottom: 12px; }
+.compare-block h4 { margin: 6px 0 6px; font-size: 13px; }
+.compare-meta { color: var(--ink-soft); font-size: 12px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.row-flip-ok td { background: var(--ok-soft); }
+.row-flip-bad td { background: var(--accent-soft); }

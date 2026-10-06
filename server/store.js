@@ -14,14 +14,52 @@ const DEFAULT_SETTINGS = {
   gasConstant: 8.314,
   probeCalibrationGraceDays: 0,
   recordIntervalMinutes: 15,
+  correctionWarnPct: 10,
 };
+
+// 存量数据迁移：老系统里「同一探头同一时刻的手工记录覆盖自动记录」没有留痕，
+// 这里把这种覆盖补登成一次更正（自动原始记录保留不动），只在内存里幂等生成，
+// 首次有写操作保存时一并落盘。
+function migrateLegacyOverrides(data) {
+  if (!Array.isArray(data.corrections)) data.corrections = [];
+  const groups = {};
+  for (const r of data.records) {
+    const key = r.probeId + '|' + r.at;
+    (groups[key] = groups[key] || []).push(r);
+  }
+  for (const key of Object.keys(groups)) {
+    const list = groups[key];
+    const auto = list.find((r) => r.source === '自动');
+    const manual = list.filter((r) => r.source === '人工').sort((a, b) => (a.id < b.id ? -1 : 1)).pop();
+    if (!auto || !manual) continue;
+    if (data.corrections.some((c) => c.recordId === auto.id)) continue;
+    const corrector = manual.operator && manual.operator !== '自动采集' ? manual.operator : '人工（存量补登）';
+    data.corrections.push({
+      id: 'crm-' + auto.id,
+      recordId: auto.id,
+      batchId: auto.batchId,
+      probeId: auto.probeId,
+      at: auto.at,
+      seq: 1,
+      fromValueC: Number(auto.temperatureC),
+      toValueC: Number(manual.temperatureC),
+      originalValueC: Number(auto.temperatureC),
+      corrector: corrector,
+      correctedAt: String(manual.at),
+      basis: '存量手工覆盖记录补登：原系统只留下覆盖后的新值，更正时刻以手工记录时刻占位',
+      remark: manual.remark || '',
+      migrated: true,
+    });
+  }
+}
 
 function normalize(raw) {
   const data = raw && typeof raw === 'object' ? raw : {};
   data.settings = Object.assign({}, DEFAULT_SETTINGS, data.settings || {});
-  for (const key of ['rooms', 'probes', 'batches', 'records', 'releases']) {
+  for (const key of ['rooms', 'probes', 'batches', 'records', 'releases', 'corrections']) {
     if (!Array.isArray(data[key])) data[key] = [];
   }
+  migrateLegacyOverrides(data);
   return data;
 }
 

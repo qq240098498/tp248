@@ -1,6 +1,7 @@
 const { AppError } = require('./errors');
 const store = require('./store');
 const coldlib = require('./coldlib');
+const corrections = require('./corrections');
 
 const ROOM_STATUS = ['运行', '检修', '停用'];
 const ROOM_TYPE = ['冷藏库', '冷藏车', '冷冻库'];
@@ -34,10 +35,16 @@ function decorateRoom(data, room) {
 
 function decorateProbe(data, probe) {
   const records = data.records.filter((r) => r.probeId === probe.id);
+  const moments = {};
+  const correctedMoments = {};
+  for (const r of records) moments[r.at] = 1;
+  for (const c of (data.corrections || []).filter((x) => x.probeId === probe.id)) correctedMoments[c.at] = 1;
   return Object.assign({}, probe, {
     roomCode: roomCode(data, probe.roomId),
     recordCount: records.length,
     manualCount: records.filter((r) => r.source === '人工').length,
+    correctionCount: (data.corrections || []).filter((c) => c.probeId === probe.id).length,
+    correctionRatioPct: Object.keys(moments).length ? store.round((Object.keys(correctedMoments).length / Object.keys(moments).length) * 100, 1) : 0,
     expired: !coldlib.probeValidOn(probe, store.nowText().slice(0, 10)),
   });
 }
@@ -46,6 +53,13 @@ function decorateBatch(data, batch) {
   const stats = coldlib.excursionStats(data, batch.id);
   const check = coldlib.releaseCheck(data, batch);
   const releases = data.releases.filter((r) => r.batchId === batch.id);
+  const batchCorrections = (function () {
+    const momentSet = {};
+    for (const r of data.records) if (r.batchId === batch.id) momentSet[r.probeId + '|' + r.at] = 1;
+    return (data.corrections || []).filter((c) => momentSet[c.probeId + '|' + c.at]);
+  })();
+  const correctedMoments = {};
+  for (const c of batchCorrections) correctedMoments[c.probeId + '|' + c.at] = 1;
   return Object.assign({}, batch, {
     roomCode: roomCode(data, batch.roomId),
     recordCount: stats.recordCount,
@@ -55,6 +69,8 @@ function decorateBatch(data, batch) {
     chainGapCount: check.chain.gapCount,
     expiredProbeCodes: check.expiredProbes.map((p) => p.probeCode),
     releaseCheck: check,
+    correctionCount: batchCorrections.length,
+    correctedMomentCount: Object.keys(correctedMoments).length,
     releaseCount: releases.length,
     lastDecision: releases.length ? releases[releases.length - 1].decision : '',
   });
@@ -202,15 +218,18 @@ function listBatches(data, query) {
 function batchDetail(data, id) {
   const batch = data.batches.find((b) => b.id === id);
   if (!batch) throw new AppError(404, 'BATCH_NOT_FOUND', '这个批次不存在');
-  const rows = coldlib.recordsOfBatch(data, id).map((r) => Object.assign({}, r, {
-    probeCode: probeCode(data, r.probeId),
-    probeExpired: !coldlib.probeValidOn(coldlib.probeOf(data, r.probeId), String(r.at).slice(0, 10)),
-  }));
+  const rows = coldlib.recordsOfBatch(data, id).map((r) => {
+    const decorated = decorateRecord(data, r);
+    decorated.probeExpired = !coldlib.probeValidOn(coldlib.probeOf(data, r.probeId), String(r.at).slice(0, 10));
+    return decorated;
+  });
   return Object.assign({}, decorateBatch(data, batch), {
     records: rows,
     effectiveRecords: coldlib.effectiveRecords(data, id).map((r) => Object.assign({}, r, { probeCode: probeCode(data, r.probeId) })),
     segments: coldlib.excursionStats(data, id).segments,
     chainGaps: coldlib.chainGaps(data, id).gaps,
+    corrections: corrections.listCorrections(data, { batchId: id }),
+    repeatedMoments: corrections.repeatedMoments(data, { batchId: id }),
     releases: data.releases.filter((r) => r.batchId === id).slice().sort((a, b) => (a.decidedAt < b.decidedAt ? 1 : -1)),
   });
 }
@@ -268,11 +287,41 @@ function removeBatch(data, id) {
   const batch = data.batches.find((b) => b.id === id);
   if (!batch) throw new AppError(404, 'BATCH_NOT_FOUND', '这个批次不存在');
   if (batch.status === '已放行') throw new AppError(409, 'BATCH_RELEASED', '这个批次已经放行，不能直接删除', { code: batch.code });
-  const used = data.records.filter((r) => r.batchId === id).length;
+  const removedRecords = data.records.filter((r) => r.batchId === id);
+  const removedCorrections = corrections.detachBatchMoments(data, removedRecords);
   data.records = data.records.filter((r) => r.batchId !== id);
   data.releases = data.releases.filter((r) => r.batchId !== id);
   data.batches = data.batches.filter((b) => b.id !== id);
-  return { removed: id, removedRecords: used };
+  return { removed: id, removedRecords: removedRecords.length, removedCorrections };
+}
+
+function decorateRecord(data, r) {
+  const adoption = coldlib.finalAdoption(data, r);
+  const history = adoption.history || [];
+  const representative = adoption.representative || r;
+  const latest = adoption.latest;
+  const settings = data.settings;
+  const rawValue = Number(r.temperatureC);
+  const finalValue = Number(adoption.value);
+  // 该时刻最早的采集值：没有更正时就是记录本身；有更正链时取第一条更正的改前值
+  const originalValue = history.length ? Number(history[0].fromValueC) : Number(representative.temperatureC);
+  return Object.assign({}, r, {
+    batchCode: batchCode(data, r.batchId),
+    probeCode: probeCode(data, r.probeId),
+    rawTemperatureC: rawValue,
+    originalTemperatureC: originalValue,
+    adoptedTemperatureC: finalValue,
+    corrected: !!latest,
+    correctionCount: history.length,
+    correctionSeq: latest ? latest.seq : 0,
+    latestCorrector: latest ? latest.corrector : '',
+    latestCorrectedAt: latest ? latest.correctedAt : '',
+    latestBasis: latest ? latest.basis : '',
+    sameMomentRecords: adoption.peers.length,
+    rawOutOfRange: rawValue > Number(settings.upperLimitC) || rawValue < Number(settings.lowerLimitC),
+    originalOutOfRange: originalValue > Number(settings.upperLimitC) || originalValue < Number(settings.lowerLimitC),
+    outOfRange: finalValue > Number(settings.upperLimitC) || finalValue < Number(settings.lowerLimitC),
+  });
 }
 
 function listRecords(data, query) {
@@ -281,14 +330,11 @@ function listRecords(data, query) {
   if (q.batchId) rows = rows.filter((r) => r.batchId === q.batchId);
   if (q.probeId) rows = rows.filter((r) => r.probeId === q.probeId);
   if (q.source) rows = rows.filter((r) => r.source === q.source);
+  if (q.corrected === '1') rows = rows.filter((r) => (data.corrections || []).some((c) => c.probeId === r.probeId && c.at === r.at));
   if (q.from) rows = rows.filter((r) => r.at >= q.from);
   if (q.to) rows = rows.filter((r) => r.at <= q.to);
   return rows
-    .map((r) => Object.assign({}, r, {
-      batchCode: batchCode(data, r.batchId),
-      probeCode: probeCode(data, r.probeId),
-      outOfRange: Number(r.temperatureC) > Number(data.settings.upperLimitC) || Number(r.temperatureC) < Number(data.settings.lowerLimitC),
-    }))
+    .map((r) => decorateRecord(data, r))
     .sort((a, b) => (a.at < b.at ? 1 : -1));
 }
 
@@ -324,8 +370,11 @@ function createRecord(data, payload) {
 function removeRecord(data, id) {
   const record = data.records.find((r) => r.id === id);
   if (!record) throw new AppError(404, 'RECORD_NOT_FOUND', '这条温度记录不存在');
+  const probeId = record.probeId;
+  const at = record.at;
   data.records = data.records.filter((r) => r.id !== id);
-  return { removed: id };
+  const removedCorrections = corrections.detachMoment(data, probeId, at);
+  return { removed: id, removedCorrections };
 }
 
 function listReleases(data, query) {

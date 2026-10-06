@@ -25,6 +25,7 @@
     <button type="button" class="tab" data-view="rooms">冷库与探头</button>
     <button type="button" class="tab" data-view="batches">批次</button>
     <button type="button" class="tab" data-view="records">温度记录</button>
+    <button type="button" class="tab" data-view="corrections">更正台账</button>
     <button type="button" class="tab" data-view="releases">放行台账</button>
   </nav>
 
@@ -124,11 +125,104 @@
             <table class="data-table">
               <thead>
                 <tr>
-                  <th>批次</th><th>探头</th><th>时刻</th><th class="num">温度(℃)</th><th>来源</th>
+                  <th>批次</th><th>探头</th><th>时刻</th><th class="num">原始值(℃)</th>
+                  <th class="num">更正后值(℃)</th><th class="num">最终采用(℃)</th><th>来源</th>
                   <th>登记人</th><th>是否超限</th><th>操作</th>
                 </tr>
               </thead>
               <tbody id="recordRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="view" data-view="corrections" id="view-corrections">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>更正占比提醒</h2>
+            <span class="panel-hint">占比＝被更正过的采集时刻数 ÷ 该探头采集时刻总数；同一时刻反复更正只算一个被更正时刻</span>
+          </div>
+          <div class="threshold-bar">
+            <label for="corrThreshold">提醒阈值（%）</label>
+            <input type="number" id="corrThreshold" min="0" max="100" step="0.5" class="threshold-input">
+            <button type="button" class="btn btn-sm" id="corrThresholdApply">应用</button>
+            <button type="button" class="btn btn-sm" id="corrThresholdSave">存为默认</button>
+            <span class="panel-hint" id="corrThresholdNote"></span>
+          </div>
+          <div class="warn-box" id="corrWarnBox"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>按探头汇总</h2>
+            <span class="panel-hint">更正条数是全部更正动作（含反复更正）；占比按被更正时刻算</span>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>探头</th><th>所属冷库</th><th>位置</th><th>状态</th>
+                  <th class="num">采集时刻数</th><th class="num">更正条数</th><th class="num">被更正时刻</th>
+                  <th class="num">更正占比</th><th>提醒</th>
+                </tr>
+              </thead>
+              <tbody id="corrProbeRows"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>按批次汇总</h2>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>批次</th><th>品名</th><th>所在冷库</th><th>状态</th>
+                  <th class="num">采集时刻数</th><th class="num">更正条数</th><th class="num">被更正时刻</th>
+                  <th class="num">更正占比</th><th>当前判定</th>
+                </tr>
+              </thead>
+              <tbody id="corrBatchRows"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>反复更正的时刻</h2>
+            <span class="panel-hint">同一探头同一时刻被改了不止一次（比如改了又改回去），点一行按序号排出完整历史</span>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>探头</th><th>读数时刻</th><th class="num">原始值</th><th class="num">最终采用值</th>
+                  <th class="num">更正次数</th><th>是否改回原值</th><th>涉及批次</th>
+                </tr>
+              </thead>
+              <tbody id="corrRepeatedRows"></tbody>
+            </table>
+          </div>
+          <div id="corrRepeatedDetail"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>更正流水</h2>
+            <span class="panel-hint" id="corrFlowNote"></span>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>序号</th><th>批次</th><th>探头</th><th>读数时刻</th>
+                  <th class="num">改前值(℃)</th><th class="num">改后值(℃)</th><th class="num">原始值(℃)</th>
+                  <th>更正人</th><th>更正时刻</th><th>依据</th><th>备注</th>
+                </tr>
+              </thead>
+              <tbody id="corrFlowRows"></tbody>
             </table>
           </div>
         </div>

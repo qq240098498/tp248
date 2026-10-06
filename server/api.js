@@ -3,6 +3,7 @@ const store = require('./store');
 const { AppError } = require('./errors');
 const res = require('./resources');
 const coldlib = require('./coldlib');
+const correctionsSvc = require('./corrections');
 
 const router = express.Router();
 
@@ -35,6 +36,10 @@ function overview(data) {
   const noRecordBatches = data.batches.filter((b) => !data.records.some((r) => r.batchId === b.id)).length;
   const expiredProbes = data.probes.filter((p) => !coldlib.probeValidOn(p, store.nowText().slice(0, 10))).length;
   const mktValues = decorated.map((d) => d.check.mkt).filter((v) => v > 0);
+  const correctionList = data.corrections || [];
+  const correctedProbeSet = {};
+  for (const c of correctionList) correctedProbeSet[c.probeId] = 1;
+  const correctionSummary = correctionsSvc.correctionSummary(data, {});
   return {
     today: store.nowText().slice(0, 10),
     roomCount: data.rooms.length,
@@ -47,6 +52,14 @@ function overview(data) {
     openBatchCount: open.length,
     recordCount: data.records.length,
     manualRecordCount: data.records.filter((r) => r.source === '人工').length,
+    correctionCount: correctionList.length,
+    correctedProbeCount: Object.keys(correctedProbeSet).length,
+    correctionWarnThresholdPct: correctionSummary.thresholdPct,
+    correctionWarnProbes: correctionSummary.warnedProbes.map((p) => ({
+      probeId: p.probeId, probeCode: p.probeCode, roomCode: p.roomCode,
+      correctionCount: p.correctionCount, correctedMomentCount: p.correctedMomentCount,
+      momentCount: p.momentCount, correctionRatioPct: p.correctionRatioPct,
+    })),
     releaseCount: data.releases.length,
     releasedCount: data.releases.filter((r) => r.decision === '放行').length,
     rejectedCount: data.releases.filter((r) => r.decision === '拒收').length,
@@ -110,6 +123,17 @@ router.post('/batches/:id/decision', withData((data, req) => ({ __save: true, __
 router.get('/records', withData((data, req) => res.listRecords(data, req.query)));
 router.post('/records', withData((data, req) => ({ __save: true, __body: res.createRecord(data, req.body || {}) })));
 router.delete('/records/:id', withData((data, req) => ({ __save: true, __body: res.removeRecord(data, req.params.id) })));
+
+// 人工更正：对某条（探头+时刻）读数登记一次更正，原始记录留痕，判定实时重算并给对照
+router.post('/records/:id/corrections', withData((data, req) => ({ __save: true, __body: correctionsSvc.createCorrection(data, req.params.id, req.body || {}) })));
+router.get('/corrections', withData((data, req) => correctionsSvc.listCorrections(data, req.query)));
+router.get('/corrections/summary', withData((data, req) => correctionsSvc.correctionSummary(data, req.query)));
+router.get('/corrections/repeated', withData((data, req) => correctionsSvc.repeatedMoments(data, req.query)));
+router.get('/probes/:id/correction-history', withData((data, req) => {
+  const at = req.query.at;
+  if (!at) throw new AppError(400, 'VALIDATION_FAILED', '要给定时刻 at', { at: 'at 不能为空，格式 2026-09-01 08:00:00' });
+  return correctionsSvc.historyOfMoment(data, req.params.id, at);
+}));
 
 router.get('/releases', withData((data, req) => res.listReleases(data, req.query)));
 

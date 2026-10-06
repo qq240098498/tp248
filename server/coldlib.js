@@ -16,7 +16,58 @@ function probeOf(data, probeId) {
   return data.probes.find((p) => p.id === probeId) || null;
 }
 
-// 同一探头同一时刻既有自动记录又有手工更正时，以手工为准
+// 一条记录名下的更正（按其探头+时刻归集），按序号排好；序号从 1 开始，全部留痕
+function correctionsForRecord(data, recordId) {
+  const row = data.records.find((r) => r.id === recordId);
+  if (!row) return [];
+  return correctionsForMoment(data, row.probeId, row.at);
+}
+
+function latestCorrectionForRecord(data, recordId) {
+  const list = correctionsForRecord(data, recordId);
+  return list.length ? list[list.length - 1] : null;
+}
+
+// 同一探头同一时刻的记录互为一组（存量里存在自动+手工两条），更正挂在组内任一条上都算
+function peerRecords(data, row) {
+  return data.records.filter((x) => x.probeId === row.probeId && x.at === row.at && x.batchId === row.batchId);
+}
+
+// 某探头某时刻（可跨同批次内成对的自动/手工行）的全部更正，按序号排好；
+// 按 probeId+at 归集而不是按 recordId，这样同组的自动行被删、手工行还在时更正仍然在。
+function correctionsForMoment(data, probeId, at) {
+  return (data.corrections || [])
+    .filter((c) => c.probeId === probeId && c.at === at)
+    .slice()
+    .sort((a, b) => (a.seq - b.seq) || (a.correctedAt < b.correctedAt ? -1 : a.correctedAt > b.correctedAt ? 1 : 0));
+}
+
+function groupCorrections(data, rows) {
+  const all = [];
+  const seen = {};
+  for (const r of rows) {
+    for (const c of correctionsForMoment(data, r.probeId, r.at)) {
+      if (!seen[c.id]) { seen[c.id] = 1; all.push(c); }
+    }
+  }
+  return all.sort((a, b) => (a.seq - b.seq) || (a.correctedAt < b.correctedAt ? -1 : a.correctedAt > b.correctedAt ? 1 : 0));
+}
+
+// 取某条记录所在「探头+时刻」组的最终采用值与最新更正
+function finalAdoption(data, row) {
+  const peers = peerRecords(data, row);
+  const list = correctionsForMoment(data, row.probeId, row.at);
+  const latest = list.length ? list[list.length - 1] : null;
+  const representative = peers.find((r) => r.source === '自动') || peers[0];
+  const manual = peers.find((r) => r.source === '人工');
+  let value = Number(representative.temperatureC);
+  if (latest) value = Number(latest.toValueC);
+  else if (representative.source === '自动' && manual) value = Number(manual.temperatureC);
+  return { value, latest, history: list, representative, peers };
+}
+
+// 同一探头同一时刻：以最新更正后的值为最终采用值；
+// 没有更正时保留旧口径（手工记录覆盖自动记录）。原始记录不删不改。
 function effectiveRecords(data, batchId) {
   const rows = recordsOfBatch(data, batchId);
   const picked = {};
@@ -29,9 +80,19 @@ function effectiveRecords(data, batchId) {
       continue;
     }
     const current = picked[key];
-    if (current.source === '人工' && row.source === '自动') picked[key] = row;
+    if (current.source !== '自动' && row.source === '自动') picked[key] = row;
   }
-  return order.map((key) => picked[key]);
+  return order.map((key) => {
+    const representative = picked[key];
+    const adoption = finalAdoption(data, representative);
+    const effective = Object.assign({}, representative, {
+      temperatureC: adoption.value,
+      corrected: !!adoption.latest,
+      correctionSeq: adoption.latest ? adoption.latest.seq : 0,
+      correctionId: adoption.latest ? adoption.latest.id : '',
+    });
+    return effective;
+  });
 }
 
 // 超限：连续超出上下限的时段，回到范围内即断开
@@ -162,6 +223,12 @@ module.exports = {
   probeOf,
   recordsOfBatch,
   effectiveRecords,
+  correctionsForRecord,
+  latestCorrectionForRecord,
+  correctionsForMoment,
+  peerRecords,
+  groupCorrections,
+  finalAdoption,
   excursionStats,
   chainGaps,
   mktCelsius,
